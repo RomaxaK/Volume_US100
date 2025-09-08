@@ -360,7 +360,7 @@ def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.
 
 
 if __name__ == "__main__":
-    df = load_data("US100.cash_2017.csv")
+    df = load_data("US100.cash_2024.csv")
     params = {
         "lookback": 20,
         "vol_lookback": 20,
