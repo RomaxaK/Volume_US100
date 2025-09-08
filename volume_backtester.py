@@ -189,6 +189,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                     print(
                         f"    ❌ Stop-loss hit at {exit_time} → -${risk:.2f} (Full SL)"
                     )
+                    print(f"    📊 Account balance after trade: ${balance:.2f}")
                 else:
                     if direction == "long":
                         remainder_profit = (
@@ -210,12 +211,14 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                         print(
                             f"    🏁 Trailing stop hit at {exit_time}, locking in remaining profit. Trade outcome: Full TP"
                         )
+                        print(f"    📊 Account balance after trade: ${balance:.2f}")
                     else:
                         outcome = "PARTIAL_SL"
                         total_partial += 1
                         print(
                             f"    🟡 Break-even stop hit at {exit_time} after partial. Trade outcome: Partial TP then SL"
                         )
+                        print(f"    📊 Account balance after trade: ${balance:.2f}")
 
                 trade_log.append(
                     {
@@ -309,6 +312,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
         print(
             f"    ⚠️ Trade open at end of data. Closing at {final_time} price {final_price:.2f}. Outcome: {outcome}"
         )
+        print(f"    📊 Account balance after trade: ${balance:.2f}")
 
     trade_df = pd.DataFrame(trade_log)
     trade_df.attrs["total_skips"] = total_skips
