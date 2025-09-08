@@ -363,6 +363,50 @@ def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.
     plt.show()
 
 
+def report_monthly_withdrawals(equity_curve: pd.DataFrame, threshold: float = 100000.0):
+    """Print monthly withdrawals when balance exceeds a threshold.
+
+    Returns the total amount withdrawn and a mapping of year -> amount withdrawn.
+    """
+    if equity_curve.empty:
+        return 0.0, {}
+
+    equity_curve = equity_curve.sort_values("time").reset_index(drop=True)
+    total_withdrawn = 0.0
+    yearly_withdrawals: dict[int, float] = {}
+
+    adjusted_balance = threshold
+    prev_month = equity_curve.loc[0, "time"].to_period("M")
+    prev_balance = equity_curve.loc[0, "balance"]
+
+    for idx in range(1, len(equity_curve)):
+        row = equity_curve.loc[idx]
+        current_month = row["time"].to_period("M")
+
+        if current_month != prev_month:
+            if adjusted_balance > threshold:
+                withdrawal = adjusted_balance - threshold
+                total_withdrawn += withdrawal
+                year = prev_month.year
+                yearly_withdrawals[year] = yearly_withdrawals.get(year, 0.0) + withdrawal
+                print(f"\U0001F4B8 Withdrawal at end of {prev_month}: ${withdrawal:.2f}")
+                adjusted_balance = threshold
+            prev_month = current_month
+
+        pnl = row["balance"] - prev_balance
+        adjusted_balance += pnl
+        prev_balance = row["balance"]
+
+    if adjusted_balance > threshold:
+        withdrawal = adjusted_balance - threshold
+        total_withdrawn += withdrawal
+        year = prev_month.year
+        yearly_withdrawals[year] = yearly_withdrawals.get(year, 0.0) + withdrawal
+        print(f"\U0001F4B8 Withdrawal at end of {prev_month}: ${withdrawal:.2f}")
+
+    return total_withdrawn, yearly_withdrawals
+
+
 if __name__ == "__main__":
     df = load_data("US100.cash_2024.csv")
     params = {
@@ -375,5 +419,12 @@ if __name__ == "__main__":
 
     }
     trades, equity = backtest_volume_breakout(df, params)
+    total_withdrawn, yearly_withdrawals = report_monthly_withdrawals(equity)
     analyze_results(trades, equity, df)
+    print("\n==== Withdrawal Summary ====")
+    print(f"Total withdrawals: ${total_withdrawn:.2f}")
+    for year in sorted(yearly_withdrawals):
+        amount = yearly_withdrawals[year]
+        print(f"{year}: ${amount:.2f}")
+    print("============================")
 
