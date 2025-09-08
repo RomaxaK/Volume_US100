@@ -22,6 +22,10 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     vol_lookback = params["vol_lookback"]
     vol_mult = params["vol_mult"]
     risk = params["risk"]
+    starting_balance = params["balance"]
+    liquidation_level = params.get("liquidation_level", 90000.0)
+    balance = starting_balance
+
     balance = params["balance"]
 
     df = df.copy()
@@ -32,6 +36,8 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     trade_log = []
 
     total_sl = total_tp = total_partial = total_skips = 0
+    liquidated_count = 0
+
 
     in_trade = False
     direction = None
@@ -221,11 +227,22 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                         "stop_price": stop_price,
                         "partial_price": partial_target,
                         "outcome": outcome,
+                        "net_PnL": balance - starting_balance,
                         "net_PnL": balance - params["balance"],
                     }
                 )
                 equity_time.append(exit_time)
                 equity_curve.append(balance)
+
+                if balance < liquidation_level:
+                    liquidated_count += 1
+                    print(
+                        f"    💥 Account liquidated at {exit_time}. Resetting to {starting_balance:.2f}"
+                    )
+                    balance = starting_balance
+                    equity_time.append(exit_time)
+                    equity_curve.append(balance)
+
 
                 in_trade = False
                 direction = None
@@ -274,11 +291,21 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                 "stop_price": stop_price,
                 "partial_price": partial_target,
                 "outcome": outcome,
+                "net_PnL": balance - starting_balance,
                 "net_PnL": balance - params["balance"],
             }
         )
         equity_time.append(final_time)
         equity_curve.append(balance)
+        if balance < liquidation_level:
+            liquidated_count += 1
+            print(
+                f"    💥 Account liquidated at {final_time}. Resetting to {starting_balance:.2f}"
+            )
+            balance = starting_balance
+            equity_time.append(final_time)
+            equity_curve.append(balance)
+
         print(
             f"    ⚠️ Trade open at end of data. Closing at {final_time} price {final_price:.2f}. Outcome: {outcome}"
         )
@@ -288,6 +315,8 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     trade_df.attrs["total_sl"] = total_sl
     trade_df.attrs["total_tp"] = total_tp
     trade_df.attrs["total_partial"] = total_partial
+    trade_df.attrs["liquidated_count"] = liquidated_count
+
     trade_df.attrs["risk"] = risk
     equity_df = pd.DataFrame({"time": equity_time, "balance": equity_curve})
     return trade_df, equity_df
@@ -300,6 +329,8 @@ def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.
     total_sl = (trade_log["outcome"] == "FULL_SL").sum()
     total_partial = (trade_log["outcome"] == "PARTIAL_SL").sum()
     total_skips = trade_log.attrs.get("total_skips", 0)
+    liquidated_count = trade_log.attrs.get("liquidated_count", 0)
+
     wins = total_tp + total_partial
     win_rate = wins / total_trades * 100 if total_trades else 0.0
     net_profit = equity_curve["balance"].iloc[-1] - equity_curve["balance"].iloc[0]
@@ -312,6 +343,8 @@ def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.
     print(f"Full SL outcomes: {total_sl}")
     print(f"Partial TP then SL outcomes: {total_partial}")
     print(f"Skipped signals due to low volume: {total_skips}")
+    print(f"Accounts liquidated: {liquidated_count}")
+
     print(f"Win rate (incl. partial wins): {win_rate:.1f}%")
     print(f"Net Profit: {net_profit:.2f} ({net_profit/risk:.1f}R)")
     print("======================================")
@@ -334,6 +367,8 @@ if __name__ == "__main__":
         "vol_mult": 2.0,
         "risk": 2000.0,
         "balance": 100000.0,
+        "liquidation_level": 90000.0,
+
     }
     trades, equity = backtest_volume_breakout(df, params)
     analyze_results(trades, equity, df)
