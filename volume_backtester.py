@@ -26,12 +26,10 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     liquidation_level = params.get("liquidation_level", 90000.0)
     balance = starting_balance
 
-    balance = params["balance"]
-
     df = df.copy()
     df["vol_avg"] = df["tick_volume"].rolling(window=vol_lookback).mean().shift(1)
 
-    equity_curve = [balance]
+    equity_curve_pnl = [balance]
     equity_time = [df["time"].iloc[0]]
     trade_log = []
 
@@ -123,7 +121,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                         f"    ✅ Partial TP hit at {curr_time} - closed 50% at +1R. +${profit_half:.2f} realized, stop moved to {trail_stop:.2f}"
                     )
                     equity_time.append(curr_time)
-                    equity_curve.append(balance)
+                    equity_curve_pnl.append(balance)
                 elif direction == "short" and low <= partial_target:
                     partial_hit = True
                     profit_half = risk * 0.5
@@ -133,7 +131,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                         f"    ✅ Partial TP hit at {curr_time} - closed 50% at +1R. +${profit_half:.2f} realized, stop moved to {trail_stop:.2f}"
                     )
                     equity_time.append(curr_time)
-                    equity_curve.append(balance)
+                    equity_curve_pnl.append(balance)
 
             if partial_hit:
                 if direction == "long":
@@ -231,11 +229,10 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                         "partial_price": partial_target,
                         "outcome": outcome,
                         "net_PnL": balance - starting_balance,
-                        "net_PnL": balance - params["balance"],
                     }
                 )
                 equity_time.append(exit_time)
-                equity_curve.append(balance)
+                equity_curve_pnl.append(balance)
 
                 if balance < liquidation_level:
                     liquidated_count += 1
@@ -244,7 +241,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                     )
                     balance = starting_balance
                     equity_time.append(exit_time)
-                    equity_curve.append(balance)
+                    equity_curve_pnl.append(balance)
 
 
                 in_trade = False
@@ -295,11 +292,10 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                 "partial_price": partial_target,
                 "outcome": outcome,
                 "net_PnL": balance - starting_balance,
-                "net_PnL": balance - params["balance"],
             }
         )
         equity_time.append(final_time)
-        equity_curve.append(balance)
+        equity_curve_pnl.append(balance)
         if balance < liquidation_level:
             liquidated_count += 1
             print(
@@ -307,7 +303,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
             )
             balance = starting_balance
             equity_time.append(final_time)
-            equity_curve.append(balance)
+            equity_curve_pnl.append(balance)
 
         print(
             f"    ⚠️ Trade open at end of data. Closing at {final_time} price {final_price:.2f}. Outcome: {outcome}"
@@ -322,12 +318,73 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     trade_df.attrs["liquidated_count"] = liquidated_count
 
     trade_df.attrs["risk"] = risk
-    equity_df = pd.DataFrame({"time": equity_time, "balance": equity_curve})
+    equity_df = pd.DataFrame({"time": equity_time, "balance": equity_curve_pnl})
     return trade_df, equity_df
 
 
-def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.DataFrame) -> None:
-    """Print a summary of results and plot the equity curve."""
+def apply_withdrawal_rule(
+    equity_curve_pnl: pd.DataFrame, threshold: float = 100000.0
+) -> tuple[pd.DataFrame, pd.DataFrame, float, dict[int, float]]:
+    """Apply monthly withdrawal rule to an equity curve.
+
+    Returns the PnL curve aligned with withdrawal events, the account
+    curve after withdrawals, the total amount withdrawn, and a mapping of
+    year -> amount withdrawn.
+    """
+    if equity_curve_pnl.empty:
+        return equity_curve_pnl.copy(), equity_curve_pnl.copy(), 0.0, {}
+
+    equity_curve_pnl = equity_curve_pnl.sort_values("time").reset_index(drop=True)
+    start_balance = equity_curve_pnl.loc[0, "balance"]
+
+    time_list = [equity_curve_pnl.loc[0, "time"]]
+    pnl_list = [start_balance]
+    account_balance = threshold
+    account_list = [account_balance]
+
+    total_withdrawn = 0.0
+    yearly_withdrawals: dict[int, float] = {}
+
+    for i in range(1, len(equity_curve_pnl)):
+        time = equity_curve_pnl.loc[i, "time"]
+        pnl_balance = equity_curve_pnl.loc[i, "balance"]
+        pnl_diff = pnl_balance - pnl_list[-1]
+        account_balance += pnl_diff
+
+        time_list.append(time)
+        pnl_list.append(pnl_balance)
+        account_list.append(account_balance)
+
+        current_month = time.to_period("M")
+        next_month = (
+            equity_curve_pnl.loc[i + 1, "time"].to_period("M")
+            if i + 1 < len(equity_curve_pnl)
+            else None
+        )
+        if next_month is None or next_month != current_month:
+            if account_balance > threshold:
+                withdrawal = account_balance - threshold
+                total_withdrawn += withdrawal
+                year = current_month.year
+                yearly_withdrawals[year] = yearly_withdrawals.get(year, 0.0) + withdrawal
+                account_balance = threshold
+
+                time_list.append(time)
+                pnl_list.append(pnl_balance)
+                account_list.append(account_balance)
+
+    equity_pnl_aligned = pd.DataFrame({"time": time_list, "balance": pnl_list})
+    equity_account = pd.DataFrame({"time": time_list, "balance": account_list})
+    return equity_pnl_aligned, equity_account, total_withdrawn, yearly_withdrawals
+
+
+def analyze_results(
+    trade_log: pd.DataFrame,
+    equity_curve_pnl: pd.DataFrame,
+    equity_curve_account: pd.DataFrame,
+    df: pd.DataFrame,
+) -> None:
+    """Print a summary of results and plot both equity curves."""
     total_trades = len(trade_log)
     total_tp = (trade_log["outcome"] == "FULL_TP").sum()
     total_sl = (trade_log["outcome"] == "FULL_SL").sum()
@@ -337,7 +394,7 @@ def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.
 
     wins = total_tp + total_partial
     win_rate = wins / total_trades * 100 if total_trades else 0.0
-    net_profit = equity_curve["balance"].iloc[-1] - equity_curve["balance"].iloc[0]
+    net_profit = equity_curve_pnl["balance"].iloc[-1] - equity_curve_pnl["balance"].iloc[0]
     risk = trade_log.attrs.get("risk", 1)
 
     print("\n==== Strategy Performance Summary ====")
@@ -354,57 +411,24 @@ def analyze_results(trade_log: pd.DataFrame, equity_curve: pd.DataFrame, df: pd.
     print("======================================")
 
     plt.figure(figsize=(8, 4))
-    plt.plot(equity_curve["time"], equity_curve["balance"], label="Equity Curve")
-    plt.title("NAS100 Breakout Strategy Equity Curve")
+    plt.plot(
+        equity_curve_pnl["time"],
+        equity_curve_pnl["balance"],
+        label="PnL (no withdrawals)",
+        color="blue",
+    )
+    plt.plot(
+        equity_curve_account["time"],
+        equity_curve_account["balance"],
+        label="Account (with withdrawals)",
+        color="green",
+    )
+    plt.title("NAS100 Breakout Strategy Equity Curves")
     plt.xlabel("Time")
     plt.ylabel("Account Balance")
     plt.legend()
     plt.tight_layout()
     plt.show()
-
-
-def report_monthly_withdrawals(equity_curve: pd.DataFrame, threshold: float = 100000.0):
-    """Print monthly withdrawals when balance exceeds a threshold.
-
-    Returns the total amount withdrawn and a mapping of year -> amount withdrawn.
-    """
-    if equity_curve.empty:
-        return 0.0, {}
-
-    equity_curve = equity_curve.sort_values("time").reset_index(drop=True)
-    total_withdrawn = 0.0
-    yearly_withdrawals: dict[int, float] = {}
-
-    adjusted_balance = threshold
-    prev_month = equity_curve.loc[0, "time"].to_period("M")
-    prev_balance = equity_curve.loc[0, "balance"]
-
-    for idx in range(1, len(equity_curve)):
-        row = equity_curve.loc[idx]
-        current_month = row["time"].to_period("M")
-
-        if current_month != prev_month:
-            if adjusted_balance > threshold:
-                withdrawal = adjusted_balance - threshold
-                total_withdrawn += withdrawal
-                year = prev_month.year
-                yearly_withdrawals[year] = yearly_withdrawals.get(year, 0.0) + withdrawal
-                print(f"\U0001F4B8 Withdrawal at end of {prev_month}: ${withdrawal:.2f}")
-                adjusted_balance = threshold
-            prev_month = current_month
-
-        pnl = row["balance"] - prev_balance
-        adjusted_balance += pnl
-        prev_balance = row["balance"]
-
-    if adjusted_balance > threshold:
-        withdrawal = adjusted_balance - threshold
-        total_withdrawn += withdrawal
-        year = prev_month.year
-        yearly_withdrawals[year] = yearly_withdrawals.get(year, 0.0) + withdrawal
-        print(f"\U0001F4B8 Withdrawal at end of {prev_month}: ${withdrawal:.2f}")
-
-    return total_withdrawn, yearly_withdrawals
 
 
 if __name__ == "__main__":
@@ -418,9 +442,11 @@ if __name__ == "__main__":
         "liquidation_level": 90000.0,
 
     }
-    trades, equity = backtest_volume_breakout(df, params)
-    total_withdrawn, yearly_withdrawals = report_monthly_withdrawals(equity)
-    analyze_results(trades, equity, df)
+    trades, equity_pnl_raw = backtest_volume_breakout(df, params)
+    equity_pnl, equity_account, total_withdrawn, yearly_withdrawals = apply_withdrawal_rule(
+        equity_pnl_raw, threshold=params["balance"]
+    )
+    analyze_results(trades, equity_pnl, equity_account, df)
     print("\n==== Withdrawal Summary ====")
     print(f"Total withdrawals: ${total_withdrawn:.2f}")
     for year in sorted(yearly_withdrawals):
