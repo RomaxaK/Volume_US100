@@ -74,10 +74,15 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     lot_size = 0.0
 
     # Daily loss tracking
+    # `start_of_day_equity` will hold equity at the start of each day
+    # `min_equity_today` tracks the lowest equity seen during the day
+    # `block_trading_today` is used to optionally disable new trades after a breach
     current_day = df.loc[lookback, "time"].date()
     start_of_day_equity = balance
+    min_equity_today = start_of_day_equity
     prev_close = df.loc[lookback - 1, "close"] if lookback > 0 else df.loc[0, "close"]
-    daily_loss_breached = False
+    block_trading_today = False
+    daily_loss_breached = False  # global flag to report if any breach ever occurred
 
     i = lookback
     while i < len(df) - 1:
@@ -93,9 +98,18 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                 else:
                     open_pnl_midnight = (entry_price - prev_close) * lot_size * PIP_VALUE_PER_LOT
             start_of_day_equity = balance + open_pnl_midnight
+            min_equity_today = start_of_day_equity  # reset daily min equity
+            block_trading_today = False              # allow new trades in the new day
             current_day = curr_day
 
         if not in_trade:
+            # If a daily loss breach happened earlier today, block new trades
+            if block_trading_today:
+                total_skips += 1
+                prev_close = df.loc[i, "close"]
+                i += 1
+                continue
+
             current_close = df.loc[i, "close"]
             recent_high = df.loc[i - lookback:i - 1, "high"].max()
             recent_low = df.loc[i - lookback:i - 1, "low"].min()
@@ -312,20 +326,29 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
             else:
                 open_pnl = (entry_price - current_price) * lot_size * PIP_VALUE_PER_LOT
         current_equity = balance + open_pnl
-        if current_equity < start_of_day_equity - max_daily_loss:
+
+        # Track the lowest equity reached today
+        if current_equity < min_equity_today:
+            min_equity_today = current_equity
+
+        # Check if the drop from the day's start exceeds the allowed max loss
+        if (start_of_day_equity - min_equity_today) > max_daily_loss and not block_trading_today:
             print(
                 f"    🚫 Daily loss limit breached at {curr_time}. Equity: ${current_equity:.2f}"
             )
             DAILY_LOSS_BREACHES.append({"time": curr_time, "equity": float(current_equity)})
             equity_time.append(curr_time)
             equity_curve_pnl.append(current_equity)
-            daily_loss_breached = True
-            break
+            block_trading_today = True   # block further trades for today
+            daily_loss_breached = True   # mark that a breach occurred
+            # Note: we do not break out of the loop; backtest continues
 
         prev_close = df.loc[i, "close"]
         i += 1
 
-    if in_trade and not daily_loss_breached:
+    # If a trade remains open at the end of the dataset, close it out
+    # regardless of whether a daily loss breach occurred earlier.
+    if in_trade:
         final_time = df["time"].iloc[-1]
         final_price = df["close"].iloc[-1]
         if not partial_hit:
