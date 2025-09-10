@@ -519,6 +519,19 @@ def analyze_results(
         if abs(_ysum - total_withdrawn) > 1e-6 or abs(_msum - total_withdrawn) > 1e-6:
             print(f"WARNING: mismatch → total={total_withdrawn:.2f}, yearly_sum={_ysum:.2f}, monthly_sum={_msum:.2f}")
 
+    # — Monthly performance summary —
+    eq = equity_curve_pnl.copy()
+    eq["period"] = eq["time"].dt.to_period("M")
+    trade_months = trade_log.copy()
+    trade_months["period"] = trade_months["exit_time"].dt.to_period("M")
+
+    start_balance = eq["balance"].iloc[0]
+    for period, grp in eq.groupby("period"):
+        end_balance = grp["balance"].iloc[-1]
+        monthly_trades = trade_months[trade_months["period"] == period].to_dict("records")
+        print_monthly_summary(period.year, period.month, end_balance, start_balance, monthly_trades)
+        start_balance = end_balance
+
     plt.figure(figsize=(8, 4))
     plt.plot(
         equity_curve_pnl["time"],
