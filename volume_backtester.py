@@ -9,6 +9,11 @@ MONTHLY_WITHDRAWALS = []               # list of dicts: {"period": "YYYY-MM", "a
 WITHDRAWALS_BY_MONTH = OrderedDict()   # "YYYY-MM" -> amount
 WITHDRAWALS_BY_YEAR  = OrderedDict()   # YYYY -> amount
 
+# Track liquidation events
+LIQUIDATIONS = []                      # list of dicts: {"period": "YYYY-MM", "time": pd.Timestamp}
+LIQUIDATIONS_BY_MONTH = OrderedDict()  # "YYYY-MM" -> count
+LIQUIDATIONS_BY_YEAR  = OrderedDict()  # YYYY -> count
+
 PIP_VALUE_PER_LOT = 1.0
 FEE_PER_LOT = 0.0
 
@@ -370,6 +375,7 @@ def apply_withdrawal_rule(
     liquidation_level: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, float, dict[int, float], int]:
     global MONTHLY_WITHDRAWALS, WITHDRAWALS_BY_MONTH, WITHDRAWALS_BY_YEAR
+    global LIQUIDATIONS, LIQUIDATIONS_BY_MONTH, LIQUIDATIONS_BY_YEAR
 
     """Build two aligned curves:
     - PnL curve (no withdrawals): as-is, aligned to trade times.
@@ -430,6 +436,10 @@ def apply_withdrawal_rule(
         if liquidation_level is not None and account_balance < liquidation_level:
             liquidations_account += 1
             account_balance = threshold
+            period = f"{t.year}-{t.month:02d}"
+            LIQUIDATIONS.append({"period": period, "time": t})
+            LIQUIDATIONS_BY_MONTH[period] = LIQUIDATIONS_BY_MONTH.get(period, 0) + 1
+            LIQUIDATIONS_BY_YEAR[t.year] = LIQUIDATIONS_BY_YEAR.get(t.year, 0) + 1
             # log the reset as a step at the same timestamp
             time_list.append(t)
             pnl_list.append(pnl_now)
@@ -458,12 +468,15 @@ def apply_withdrawal_rule(
 
     return equity_pnl_aligned, equity_account, total_withdrawn, yearly_withdrawals, liquidations_account
 
-def print_monthly_summary(year, month, balance, start_balance, trades):
+def print_monthly_summary(year, month, balance, account_balance, start_balance, trades, liquidations):
     pnl = balance - start_balance
     wins = sum(1 for t in trades if t.get("outcome") != "FULL_SL")
     losses = len(trades) - wins
     sign = "+" if pnl >= 0 else "-"
-    print(f"{year}-{month:02d} | Balance: ${balance:,.2f} | Trades: {len(trades)} | W:{wins} L:{losses} | P&L: {sign}${abs(pnl):,.2f}")
+    print(
+        f"{year}-{month:02d} | Balance: ${balance:,.2f} | Account: ${account_balance:,.2f} | "
+        f"Trades: {len(trades)} | W:{wins} L:{losses} | P&L: {sign}${abs(pnl):,.2f} | Liquidations: {liquidations}"
+    )
 
 
 
@@ -519,18 +532,33 @@ def analyze_results(
         if abs(_ysum - total_withdrawn) > 1e-6 or abs(_msum - total_withdrawn) > 1e-6:
             print(f"WARNING: mismatch → total={total_withdrawn:.2f}, yearly_sum={_ysum:.2f}, monthly_sum={_msum:.2f}")
 
+    print("\n==== Liquidation Summary ====")
+    total_liq = sum(LIQUIDATIONS_BY_YEAR.values()) if LIQUIDATIONS_BY_YEAR else 0
+    print(f"Total liquidations: {total_liq}")
+    for year in sorted(LIQUIDATIONS_BY_YEAR):
+        print(f"{year}: {LIQUIDATIONS_BY_YEAR[year]}")
+    print("============================")
+    if LIQUIDATIONS_BY_MONTH:
+        print("\n— Monthly liquidations —")
+        for period in sorted(LIQUIDATIONS_BY_MONTH):
+            print(f"{period}: {LIQUIDATIONS_BY_MONTH[period]}")
+
     # — Monthly performance summary —
-    eq = equity_curve_pnl.copy()
-    eq["period"] = eq["time"].dt.to_period("M")
+    eq_pnl = equity_curve_pnl.copy()
+    eq_pnl["period"] = eq_pnl["time"].dt.to_period("M")
+    eq_account = equity_curve_account.copy()
+    eq_account["period"] = eq_account["time"].dt.to_period("M")
     trade_months = trade_log.copy()
     trade_months["period"] = trade_months["exit_time"].dt.to_period("M")
 
-    start_balance = eq["balance"].iloc[0]
-    for period, grp in eq.groupby("period"):
-        end_balance = grp["balance"].iloc[-1]
+    start_balance = eq_pnl["balance"].iloc[0]
+    for period in eq_pnl["period"].unique():
+        pnl_end = eq_pnl[eq_pnl["period"] == period]["balance"].iloc[-1]
+        account_end = eq_account[eq_account["period"] == period]["balance"].iloc[-1]
         monthly_trades = trade_months[trade_months["period"] == period].to_dict("records")
-        print_monthly_summary(period.year, period.month, end_balance, start_balance, monthly_trades)
-        start_balance = end_balance
+        liq = LIQUIDATIONS_BY_MONTH.get(f"{period.year}-{period.month:02d}", 0)
+        print_monthly_summary(period.year, period.month, pnl_end, account_end, start_balance, monthly_trades, liq)
+        start_balance = pnl_end
 
     plt.figure(figsize=(8, 4))
     plt.plot(
