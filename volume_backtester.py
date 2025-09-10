@@ -473,9 +473,13 @@ def print_monthly_summary(year, month, balance, account_balance, start_balance, 
     wins = sum(1 for t in trades if t.get("outcome") != "FULL_SL")
     losses = len(trades) - wins
     sign = "+" if pnl >= 0 else "-"
+    period = f"{year}-{month:02d}"
+    withdrawal = WITHDRAWALS_BY_MONTH.get(period, 0.0)
+    withdrawal_str = f" | Withdrawal: ${withdrawal:,.2f}" if withdrawal > 0 else ""
     print(
         f"{year}-{month:02d} | Balance: ${balance:,.2f} | Account: ${account_balance:,.2f} | "
-        f"Trades: {len(trades)} | W:{wins} L:{losses} | P&L: {sign}${abs(pnl):,.2f} | Liquidations: {liquidations}"
+        f"Trades: {len(trades)} | W:{wins} L:{losses} | P&L: {sign}${abs(pnl):,.2f} | "
+        f"Liquidations: {liquidations}{withdrawal_str}"
     )
 
 
