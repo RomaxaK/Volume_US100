@@ -14,6 +14,9 @@ LIQUIDATIONS = []                      # list of dicts: {"period": "YYYY-MM", "t
 LIQUIDATIONS_BY_MONTH = OrderedDict()  # "YYYY-MM" -> count
 LIQUIDATIONS_BY_YEAR  = OrderedDict()  # YYYY -> count
 
+# Track daily loss limit breaches
+DAILY_LOSS_BREACHES = []               # list of dicts: {"time": pd.Timestamp, "equity": float}
+
 PIP_VALUE_PER_LOT = 1.0
 FEE_PER_LOT = 0.0
 
@@ -36,6 +39,11 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     starting_balance = params["balance"]
     liquidation_level = params.get("liquidation_level", 90000.0)
     balance = starting_balance
+
+    # Daily loss parameters
+    initial_account = starting_balance
+    max_daily_loss_pct = params.get("max_daily_loss_pct", 0.05)
+    max_daily_loss = initial_account * max_daily_loss_pct
 
     df = df.copy()
     df["vol_avg"] = df["tick_volume"].rolling(window=vol_lookback).mean().shift(1)
@@ -63,10 +71,29 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     direction = None
     entry_price = entry_time = stop_price = trail_stop = partial_target = None
     partial_hit = False
+    lot_size = 0.0
+
+    # Daily loss tracking
+    current_day = df.loc[lookback, "time"].date()
+    start_of_day_equity = balance
+    prev_close = df.loc[lookback - 1, "close"] if lookback > 0 else df.loc[0, "close"]
+    daily_loss_breached = False
 
     i = lookback
     while i < len(df) - 1:
         curr_time = df.loc[i, "time"]
+        curr_day = curr_time.date()
+
+        # Record start-of-day equity at midnight
+        if curr_day != current_day:
+            open_pnl_midnight = 0.0
+            if in_trade:
+                if direction == "long":
+                    open_pnl_midnight = (prev_close - entry_price) * lot_size * PIP_VALUE_PER_LOT
+                else:
+                    open_pnl_midnight = (entry_price - prev_close) * lot_size * PIP_VALUE_PER_LOT
+            start_of_day_equity = balance + open_pnl_midnight
+            current_day = curr_day
 
         if not in_trade:
             current_close = df.loc[i, "close"]
@@ -98,6 +125,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                     if stop_price >= entry_price:
                         in_trade = False
                         total_skips += 1
+                        prev_close = df.loc[i, "close"]
                         i += 1
                         continue
                     stop_distance = entry_price - stop_price
@@ -107,6 +135,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                     if stop_price <= entry_price:
                         in_trade = False
                         total_skips += 1
+                        prev_close = df.loc[i, "close"]
                         i += 1
                         continue
                     stop_distance = stop_price - entry_price
@@ -125,6 +154,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                 print(
                     f"    Initial lot size ~ {lot_size:.2f} for RISK_PER_TRADE ${risk:.2f}"
                 )
+                prev_close = df.loc[i, "close"]
                 i += 1
                 continue
 
@@ -271,10 +301,31 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
                 entry_price = entry_time = None
                 stop_price = trail_stop = partial_target = None
                 partial_hit = False
+                lot_size = 0.0
 
+        # Daily loss check after updating trade state
+        current_price = df.loc[i, "close"]
+        open_pnl = 0.0
+        if in_trade:
+            if direction == "long":
+                open_pnl = (current_price - entry_price) * lot_size * PIP_VALUE_PER_LOT
+            else:
+                open_pnl = (entry_price - current_price) * lot_size * PIP_VALUE_PER_LOT
+        current_equity = balance + open_pnl
+        if current_equity < start_of_day_equity - max_daily_loss:
+            print(
+                f"    🚫 Daily loss limit breached at {curr_time}. Equity: ${current_equity:.2f}"
+            )
+            DAILY_LOSS_BREACHES.append({"time": curr_time, "equity": float(current_equity)})
+            equity_time.append(curr_time)
+            equity_curve_pnl.append(current_equity)
+            daily_loss_breached = True
+            break
+
+        prev_close = df.loc[i, "close"]
         i += 1
 
-    if in_trade:
+    if in_trade and not daily_loss_breached:
         final_time = df["time"].iloc[-1]
         final_price = df["close"].iloc[-1]
         if not partial_hit:
@@ -364,6 +415,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     trade_df.attrs["liquidated_count"] = liquidated_count
 
     trade_df.attrs["risk"] = risk
+    trade_df.attrs["daily_loss_breached"] = daily_loss_breached
     equity_df = pd.DataFrame({"time": equity_time, "balance": equity_curve_pnl})
     return trade_df, equity_df
 
@@ -594,6 +646,7 @@ if __name__ == "__main__":
         "risk": 2500.0,
         "balance": 100000.0,
         "liquidation_level": 90000.0,
+        "max_daily_loss_pct": 0.05,
 
     }
     trades, equity_pnl_raw = backtest_volume_breakout(df, params)
