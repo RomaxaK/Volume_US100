@@ -680,3 +680,9 @@ if __name__ == "__main__":
     )
 
     analyze_results(trades, equity_pnl, equity_account, df, total_withdrawn, yearly_withdrawals)
+
+    # Save detailed outputs for later analysis
+    trades.to_csv("backtest_trades.csv", index=False)
+    equity_pnl.to_csv("equity_pnl.csv", index=False)
+    equity_account.to_csv("equity_account.csv", index=False)
+    print("Results saved to backtest_trades.csv, equity_pnl.csv and equity_account.csv")
