@@ -3,6 +3,7 @@ from math import floor
 import matplotlib.pyplot as plt
 from collections import OrderedDict
 from pandas.tseries.offsets import MonthEnd
+from pathlib import Path
 
 # Track withdrawals for printing and summaries
 MONTHLY_WITHDRAWALS = []               # list of dicts: {"period": "YYYY-MM", "amount": float, "time": pd.Timestamp}
@@ -19,6 +20,9 @@ DAILY_LOSS_BREACHES = []               # list of dicts: {"time": pd.Timestamp, "
 
 PIP_VALUE_PER_LOT = 1.0
 FEE_PER_LOT = 0.0
+
+# base directory for loading data and saving outputs
+BASE_DIR = Path(__file__).resolve().parent
 
 
 def load_data(file_path: str) -> pd.DataFrame:
@@ -661,7 +665,7 @@ def analyze_results(
 
 
 if __name__ == "__main__":
-    df = load_data("US100.cash_2024.csv")
+    df = load_data(BASE_DIR / "US100.cash_2024.csv")
     params = {
         "lookback": 20,
         "vol_lookback": 20,
@@ -681,6 +685,16 @@ if __name__ == "__main__":
 
     analyze_results(trades, equity_pnl, equity_account, df, total_withdrawn, yearly_withdrawals)
 
+    # Save detailed outputs for later analysis in script directory
+    out_trades = BASE_DIR / "backtest_trades.csv"
+    out_pnl = BASE_DIR / "equity_pnl.csv"
+    out_account = BASE_DIR / "equity_account.csv"
+    trades.to_csv(out_trades, index=False)
+    equity_pnl.to_csv(out_pnl, index=False)
+    equity_account.to_csv(out_account, index=False)
+    print(
+        f"Results saved to {out_trades}, {out_pnl} and {out_account}"
+    )
     # Save detailed outputs for later analysis
     trades.to_csv("backtest_trades.csv", index=False)
     equity_pnl.to_csv("equity_pnl.csv", index=False)
