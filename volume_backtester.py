@@ -695,3 +695,8 @@ if __name__ == "__main__":
     print(
         f"Results saved to {out_trades}, {out_pnl} and {out_account}"
     )
+    # Save detailed outputs for later analysis
+    trades.to_csv("backtest_trades.csv", index=False)
+    equity_pnl.to_csv("equity_pnl.csv", index=False)
+    equity_account.to_csv("equity_account.csv", index=False)
+    print("Results saved to backtest_trades.csv, equity_pnl.csv and equity_account.csv")
