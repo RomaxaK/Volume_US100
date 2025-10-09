@@ -3,7 +3,6 @@ from math import floor
 import matplotlib.pyplot as plt
 from collections import OrderedDict
 from pandas.tseries.offsets import MonthEnd
-from pathlib import Path
 
 # Track withdrawals for printing and summaries
 MONTHLY_WITHDRAWALS = []               # list of dicts: {"period": "YYYY-MM", "amount": float, "time": pd.Timestamp}
@@ -20,9 +19,6 @@ DAILY_LOSS_BREACHES = []               # list of dicts: {"time": pd.Timestamp, "
 
 PIP_VALUE_PER_LOT = 1.0
 FEE_PER_LOT = 0.0
-
-# base directory for loading data and saving outputs
-BASE_DIR = Path(__file__).resolve().parent
 
 
 def load_data(file_path: str) -> pd.DataFrame:
@@ -337,77 +333,84 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
 
         # Check if the drop from the day's start exceeds the allowed max loss
         if (start_of_day_equity - min_equity_today) > max_daily_loss and not block_trading_today:
-            print(
-                f"    🚫 Daily loss limit breached at {curr_time}. Equity: ${current_equity:.2f}"
-            )
+            print(f"    🚫 Daily loss limit breached at {curr_time}. Equity: ${current_equity:.2f}")
             DAILY_LOSS_BREACHES.append({"time": curr_time, "equity": float(current_equity)})
-            equity_time.append(curr_time)
-            equity_curve_pnl.append(current_equity)
-            block_trading_today = True   # block further trades for today
-            daily_loss_breached = True   # mark that a breach occurred
-            # Note: we do not break out of the loop; backtest continues
 
-        prev_close = df.loc[i, "close"]
-        i += 1
+            # === NEW: count liquidation + reset account (daily liquidation rule) ===
+            period = f"{curr_time.year}-{curr_time.month:02d}"
 
-    # If a trade remains open at the end of the dataset, close it out
-    # regardless of whether a daily loss breach occurred earlier.
-    if in_trade:
-        final_time = df["time"].iloc[-1]
-        final_price = df["close"].iloc[-1]
-        if not partial_hit:
-            outcome = "FULL_SL"
-            pnl = -risk
-            balance += pnl
-            total_sl += 1
-        else:
-            if direction == "long":
-                remainder_profit = (
-                    (final_price - entry_price)
-                    * (lot_size / 2)
-                    * PIP_VALUE_PER_LOT
-                )
-            else:
-                remainder_profit = (
-                    (entry_price - final_price)
-                    * (lot_size / 2)
-                    * PIP_VALUE_PER_LOT
-                )
-            pnl = remainder_profit
-            balance += pnl
-            if pnl > 1e-9:
-                outcome = "FULL_TP"
-                total_tp += 1
-            else:
-                outcome = "PARTIAL_SL"
-                total_partial += 1
-        trade_log.append(
-            {
-                "entry_time": entry_time,
-                "exit_time": final_time,
-                "direction": "BUY" if direction == "long" else "SELL",
-                "entry_price": entry_price,
-                "exit_price": final_price,
-                "stop_price": stop_price,
-                "partial_price": partial_target,
-                "outcome": outcome,
-                "net_PnL": balance - starting_balance,
-            }
-        )
-        equity_time.append(final_time)
-        equity_curve_pnl.append(balance)
-        if balance < liquidation_level:
+            # bump global liquidation aggregates
+            LIQUIDATIONS.append({"period": period, "time": curr_time})
+            LIQUIDATIONS_BY_MONTH[period] = LIQUIDATIONS_BY_MONTH.get(period, 0) + 1
+            LIQUIDATIONS_BY_YEAR[curr_time.year] = LIQUIDATIONS_BY_YEAR.get(curr_time.year, 0) + 1
             liquidated_count += 1
-            print(
-                f"    💥 Account liquidated at {final_time}. Resetting to {starting_balance:.2f}"
-            )
+
+            # if a trade is open, force-close it at the current bar close to keep the log consistent
+            if in_trade:
+                exit_time = curr_time
+                exit_price = df.loc[i, "close"]
+                # compute realized PnL as liquidation close
+                if direction == "long":
+                    if not partial_hit:
+                        pnl = (exit_price - entry_price) * lot_size * PIP_VALUE_PER_LOT
+                    else:
+                        # half already realized at partial; close half at exit_price
+                        pnl = (exit_price - entry_price) * (lot_size / 2) * PIP_VALUE_PER_LOT + (
+                                    risk / 2)  # +1R already booked
+                else:
+                    if not partial_hit:
+                        pnl = (entry_price - exit_price) * lot_size * PIP_VALUE_PER_LOT
+                    else:
+                        pnl = (entry_price - exit_price) * (lot_size / 2) * PIP_VALUE_PER_LOT + (risk / 2)
+
+                balance += pnl
+
+                trade_log.append({
+                    "entry_time": entry_time,
+                    "exit_time": exit_time,
+                    "direction": "BUY" if direction == "long" else "SELL",
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "stop_price": stop_price,
+                    "partial_price": partial_target,
+                    "outcome": "LIQUIDATION_RESET",
+                    "net_PnL": balance - starting_balance,
+                })
+
+                print(f"    💥 Liquidation on daily breach. Trade closed at {exit_time} price {exit_price:.2f}.")
+                print(f"    📊 Account balance after forced close: ${balance:.2f}")
+
+                # clear trade state
+                in_trade = False
+                partial_hit = False
+                trail_stop = None
+
+            # reset the account to a fresh challenge starting balance
+            print(f"    💥 Account liquidated (daily rule). Resetting to {starting_balance:.2f}")
             balance = starting_balance
-            equity_time.append(final_time)
+            equity_time.append(curr_time)
             equity_curve_pnl.append(balance)
+
+            # block new trades for the rest of the day and mark that a breach happened
+            block_trading_today = True
+            daily_loss_breached = True
+
+        final_time = df.loc[df.index[-1], "time"]
+        final_price = df.loc[df.index[-1], "close"]
+
+        # decide what to do with the open trade
+        if direction == "long":
+            pnl = (final_price - entry_price) * lot_size  # adjust formula to your code
+        else:
+            pnl = (entry_price - final_price) * lot_size  # adjust formula to your code
+
+        outcome = "Force-closed at end of data"
 
         print(
             f"    ⚠️ Trade open at end of data. Closing at {final_time} price {final_price:.2f}. Outcome: {outcome}"
         )
+        pnl_balance_live += pnl
+
         print(f"    📊 Account balance after trade: ${balance:.2f}")
 
         # realised PnL of this last trade
@@ -419,7 +422,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
         print(f"🏦 Account balance after trade: ${account_balance_live:,.2f}")
 
         # --- month-end withdrawal print (when month changes) ---
-        t = pd.Timestamp(final_time)
+        t = pd.Timestamp(equity_time[-1])
         m = t.to_period("M")
         if current_month is None:
             current_month = m
@@ -664,13 +667,14 @@ def analyze_results(
     plt.show()
 
 
+
 if __name__ == "__main__":
-    df = load_data(BASE_DIR / "US100.cash_2024.csv")
+    df = load_data("US100.cash_2017.csv")
     params = {
         "lookback": 20,
         "vol_lookback": 20,
         "vol_mult": 2.0,
-        "risk": 2500.0,
+        "risk": 2000.0,
         "balance": 100000.0,
         "liquidation_level": 90000.0,
         "max_daily_loss_pct": 0.05,
@@ -684,19 +688,3 @@ if __name__ == "__main__":
     )
 
     analyze_results(trades, equity_pnl, equity_account, df, total_withdrawn, yearly_withdrawals)
-
-    # Save detailed outputs for later analysis in script directory
-    out_trades = BASE_DIR / "backtest_trades.csv"
-    out_pnl = BASE_DIR / "equity_pnl.csv"
-    out_account = BASE_DIR / "equity_account.csv"
-    trades.to_csv(out_trades, index=False)
-    equity_pnl.to_csv(out_pnl, index=False)
-    equity_account.to_csv(out_account, index=False)
-    print(
-        f"Results saved to {out_trades}, {out_pnl} and {out_account}"
-    )
-    # Save detailed outputs for later analysis
-    trades.to_csv("backtest_trades.csv", index=False)
-    equity_pnl.to_csv("equity_pnl.csv", index=False)
-    equity_account.to_csv("equity_account.csv", index=False)
-    print("Results saved to backtest_trades.csv, equity_pnl.csv and equity_account.csv")
