@@ -20,6 +20,14 @@ DAILY_LOSS_BREACHES = []               # list of dicts: {"time": pd.Timestamp, "
 PIP_VALUE_PER_LOT = 1.0
 FEE_PER_LOT = 0.0
 
+lookback = 20
+vol_lookback = 20
+vol_mult = 2.0
+risk = 2000.0
+starting_balance = 100000.0
+liquidation_level = 90000.0
+max_daily_loss_pct = 0.05
+
 
 def load_data(file_path: str) -> pd.DataFrame:
     """Load CSV data, standardise columns and sort by time."""
@@ -30,19 +38,21 @@ def load_data(file_path: str) -> pd.DataFrame:
     return df
 
 
-def backtest_volume_breakout(df: pd.DataFrame, params: dict):
+def backtest_volume_breakout(
+    df: pd.DataFrame,
+    lookback: int,
+    vol_lookback: int,
+    vol_mult: float,
+    risk: float,
+    starting_balance: float,
+    liquidation_level: float = 90000.0,
+    max_daily_loss_pct: float = 0.05,
+):
     """Run the breakout strategy with volume confirmation and return trades and equity."""
-    lookback = params["lookback"]
-    vol_lookback = params["vol_lookback"]
-    vol_mult = params["vol_mult"]
-    risk = params["risk"]
-    starting_balance = params["balance"]
-    liquidation_level = params.get("liquidation_level", 90000.0)
     balance = starting_balance
 
     # Daily loss parameters
     initial_account = starting_balance
-    max_daily_loss_pct = params.get("max_daily_loss_pct", 0.05)
     max_daily_loss = initial_account * max_daily_loss_pct
 
     df = df.copy()
@@ -56,7 +66,7 @@ def backtest_volume_breakout(df: pd.DataFrame, params: dict):
     liquidated_count = 0
 
     # --- live tracking for prints (separate from plotting) ---
-    threshold = params.get("balance", 100000.0)
+    threshold = starting_balance
 
     # PnL curve (raw, no withdrawals) for printing after each trade
     pnl_balance_live = 0.0
@@ -670,21 +680,20 @@ def analyze_results(
 
 if __name__ == "__main__":
     df = load_data("US100.cash_2017.csv")
-    params = {
-        "lookback": 20,
-        "vol_lookback": 20,
-        "vol_mult": 2.0,
-        "risk": 2000.0,
-        "balance": 100000.0,
-        "liquidation_level": 90000.0,
-        "max_daily_loss_pct": 0.05,
-
-    }
-    trades, equity_pnl_raw = backtest_volume_breakout(df, params)
+    trades, equity_pnl_raw = backtest_volume_breakout(
+        df,
+        lookback=lookback,
+        vol_lookback=vol_lookback,
+        vol_mult=vol_mult,
+        risk=risk,
+        starting_balance=starting_balance,
+        liquidation_level=liquidation_level,
+        max_daily_loss_pct=max_daily_loss_pct,
+    )
     equity_pnl, equity_account, total_withdrawn, yearly_withdrawals, account_liquidations = apply_withdrawal_rule(
         equity_pnl_raw,
-        threshold=params["balance"],  # 100k
-        liquidation_level=params.get("liquidation_level")  # e.g., 90k or None
+        threshold=starting_balance,  # 100k
+        liquidation_level=liquidation_level  # e.g., 90k or None
     )
 
     analyze_results(trades, equity_pnl, equity_account, df, total_withdrawn, yearly_withdrawals)
