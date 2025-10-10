@@ -405,39 +405,61 @@ def backtest_volume_breakout(
             block_trading_today = True
             daily_loss_breached = True
 
-        final_time = df.loc[df.index[-1], "time"]
-        final_price = df.loc[df.index[-1], "close"]
+        prev_close = df.loc[i, "close"]
+        i += 1
 
-        # decide what to do with the open trade
-        if direction == "long":
-            pnl = (final_price - entry_price) * lot_size  # adjust formula to your code
+    if in_trade:
+        final_time = df.iloc[-1]["time"]
+        final_price = df.iloc[-1]["close"]
+
+        if not partial_hit:
+            if direction == "long":
+                pnl = (final_price - entry_price) * lot_size * PIP_VALUE_PER_LOT
+            else:
+                pnl = (entry_price - final_price) * lot_size * PIP_VALUE_PER_LOT
+            balance += pnl
+            outcome = "FORCED_CLOSE"
         else:
-            pnl = (entry_price - final_price) * lot_size  # adjust formula to your code
-
-        outcome = "Force-closed at end of data"
+            if direction == "long":
+                remainder_profit = (final_price - entry_price) * (lot_size / 2) * PIP_VALUE_PER_LOT
+            else:
+                remainder_profit = (entry_price - final_price) * (lot_size / 2) * PIP_VALUE_PER_LOT
+            pnl = remainder_profit
+            balance += pnl
+            outcome = "PARTIAL_FORCED_CLOSE" if pnl <= 1e-9 else "FORCED_CLOSE"
 
         print(
             f"    ⚠️ Trade open at end of data. Closing at {final_time} price {final_price:.2f}. Outcome: {outcome}"
         )
-        pnl_balance_live += pnl
-
         print(f"    📊 Account balance after trade: ${balance:.2f}")
 
-        # realised PnL of this last trade
+        trade_log.append(
+            {
+                "entry_time": entry_time,
+                "exit_time": final_time,
+                "direction": "BUY" if direction == "long" else "SELL",
+                "entry_price": entry_price,
+                "exit_price": final_price,
+                "stop_price": stop_price,
+                "partial_price": partial_target,
+                "outcome": outcome,
+                "net_PnL": balance - starting_balance,
+            }
+        )
+        equity_time.append(final_time)
+        equity_curve_pnl.append(balance)
+
         pnl_balance_live += pnl
         account_balance_live += pnl
 
-        # 🖨 print both
         print(f"📈 PnL after trade: ${pnl_balance_live:,.2f}")
         print(f"🏦 Account balance after trade: ${account_balance_live:,.2f}")
 
-        # --- month-end withdrawal print (when month changes) ---
         t = pd.Timestamp(equity_time[-1])
         m = t.to_period("M")
         if current_month is None:
             current_month = m
 
-        # If we've moved into a new month, settle the PREVIOUS month
         if m != current_month:
             if account_balance_live > threshold:
                 w = account_balance_live - threshold
