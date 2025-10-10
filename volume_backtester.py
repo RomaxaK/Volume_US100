@@ -1,8 +1,13 @@
+import contextlib
+from datetime import datetime
+from pathlib import Path
+import io
 import pandas as pd
 from math import floor
 import matplotlib.pyplot as plt
 from collections import OrderedDict
 from pandas.tseries.offsets import MonthEnd
+import re
 
 # Track withdrawals for printing and summaries
 MONTHLY_WITHDRAWALS = []               # list of dicts: {"period": "YYYY-MM", "amount": float, "time": pd.Timestamp}
@@ -700,22 +705,76 @@ def analyze_results(
 
 
 
-if __name__ == "__main__":
-    df = load_data("US100.cash_2017.csv")
-    trades, equity_pnl_raw = backtest_volume_breakout(
-        df,
-        lookback=lookback,
-        vol_lookback=vol_lookback,
-        vol_mult=vol_mult,
-        risk=risk,
-        starting_balance=starting_balance,
-        liquidation_level=liquidation_level,
-        max_daily_loss_pct=max_daily_loss_pct,
-    )
-    equity_pnl, equity_account, total_withdrawn, yearly_withdrawals, account_liquidations = apply_withdrawal_rule(
-        equity_pnl_raw,
-        threshold=starting_balance,  # 100k
-        liquidation_level=liquidation_level  # e.g., 90k or None
-    )
+LOG_DIR = Path("venv")
 
-    analyze_results(trades, equity_pnl, equity_account, df, total_withdrawn, yearly_withdrawals)
+
+def _ensure_log_dir() -> Path:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return LOG_DIR
+
+
+def _next_iteration_number(log_dir: Path) -> int:
+    existing_numbers = []
+    pattern = re.compile(r"iteration_(\d+)_")
+    for path in log_dir.glob("iteration_*.txt"):
+        match = pattern.search(path.name)
+        if match:
+            existing_numbers.append(int(match.group(1)))
+    return max(existing_numbers, default=0) + 1
+
+
+def run_iteration(
+    data_file: str = "US100.cash_2017.csv",
+    iteration_number: int | None = None,
+) -> None:
+    """Execute one backtest iteration and save the console output to a log file."""
+
+    log_dir = _ensure_log_dir()
+    if iteration_number is None:
+        iteration_number = _next_iteration_number(log_dir)
+
+    log_buffer = io.StringIO()
+    with contextlib.redirect_stdout(log_buffer):
+        df = load_data(data_file)
+        trades, equity_pnl_raw = backtest_volume_breakout(
+            df,
+            lookback=lookback,
+            vol_lookback=vol_lookback,
+            vol_mult=vol_mult,
+            risk=risk,
+            starting_balance=starting_balance,
+            liquidation_level=liquidation_level,
+            max_daily_loss_pct=max_daily_loss_pct,
+        )
+        (
+            equity_pnl,
+            equity_account,
+            total_withdrawn,
+            yearly_withdrawals,
+            account_liquidations,
+        ) = apply_withdrawal_rule(
+            equity_pnl_raw,
+            threshold=starting_balance,  # 100k
+            liquidation_level=liquidation_level,  # e.g., 90k or None
+        )
+
+        analyze_results(
+            trades,
+            equity_pnl,
+            equity_account,
+            df,
+            total_withdrawn,
+            yearly_withdrawals,
+        )
+
+    output = log_buffer.getvalue()
+    print(output, end="")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = log_dir / f"iteration_{iteration_number:03d}_{timestamp}.txt"
+    filename.write_text(output, encoding="utf-8")
+    print(f"\n📝 Iteration {iteration_number} output saved to {filename.resolve()}")
+
+
+if __name__ == "__main__":
+    run_iteration()
