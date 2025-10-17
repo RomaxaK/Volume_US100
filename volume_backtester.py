@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from collections import OrderedDict
 from pandas.tseries.offsets import MonthEnd
 import re
+import os
 
 # Track withdrawals for printing and summaries
 MONTHLY_WITHDRAWALS = []               # list of dicts: {"period": "YYYY-MM", "amount": float, "time": pd.Timestamp}
@@ -484,6 +485,48 @@ def backtest_volume_breakout(
     trade_df.attrs["risk"] = risk
     trade_df.attrs["daily_loss_breached"] = daily_loss_breached
     equity_df = pd.DataFrame({"time": equity_time, "balance": equity_curve_pnl})
+    # --- SAVE RESULTS TO DISK ---
+    # build output folder
+    out_dir = Path("results")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # try to infer a symbol/stem from the input data file if it exists; otherwise fall back
+    try:
+        symbol = Path("US100.cash_2017.csv").stem  # e.g. "US100.cash_2017"
+    except Exception:
+        symbol = "results"
+
+    # timestamp to make filenames unique and sortable
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    trades_path = out_dir / f"trades_{symbol}_{ts}.csv"
+    equity_path = out_dir / f"equity_{symbol}_{ts}.csv"
+
+    # write files
+    trade_df.to_csv(trades_path, index=False)
+    equity_df.to_csv(equity_path, index=False)
+    # --- SAVE TERMINAL-STYLE LOG ---
+    txt_path = out_dir / f"log_{symbol}_{ts}.txt"
+
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write("=== TRADE LOG SUMMARY ===\n")
+        f.write(f"Data source: {symbol}\n")
+        f.write(f"Generated at: {datetime.now()}\n\n")
+
+        # Write trades summary similar to your print output
+        for idx, row in trade_df.iterrows():
+            f.write(f"{idx+1:03d}. {row.to_dict()}\n")
+
+        f.write("\n=== EQUITY SNAPSHOT (last 10 points) ===\n")
+        f.write(equity_df.tail(10).to_string(index=False))
+        f.write("\n\n--- End of Log ---\n")
+
+    print(f"📝 Saved terminal-style log to: {txt_path}")
+
+
+    print(f"💾 Saved trades to: {trades_path}")
+    print(f"💾 Saved equity curve to: {equity_path}")
+
     return trade_df, equity_df
 
 
@@ -705,7 +748,7 @@ def analyze_results(
 
 
 
-LOG_DIR = Path("venv")
+LOG_DIR = Path("/Users/romakaminskiy/PycharmProjects")
 
 
 def _ensure_log_dir() -> Path:
