@@ -748,7 +748,7 @@ def analyze_results(
 
 
 
-LOG_DIR = Path("/Users/romakaminskiy/PycharmProjects/results")
+LOG_DIR = (Path(__file__).parent / "logs").resolve()
 
 
 def _ensure_log_dir() -> Path:
@@ -816,6 +816,7 @@ def run_iteration(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = log_dir / f"iteration_{iteration_number:03d}_{timestamp}.txt"
     filename.write_text(output, encoding="utf-8")
+    print(f"📝 Iteration {iteration_number} output saved to {filename.resolve()}")
 
     # infer symbol from the data file name (fallback to 'session' if not available)
     try:
@@ -830,8 +831,6 @@ def run_iteration(
     res_txt.write_text(output, encoding="utf-8")
     print(f"📝 Saved terminal-style log to: {res_txt.resolve()}")
     # ---------------------------------------------------------------
-
-    print(f"\n📝 Iteration {iteration_number} output saved to {filename.resolve()}")
 
 
 if __name__ == "__main__":
