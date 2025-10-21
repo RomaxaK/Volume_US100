@@ -229,8 +229,9 @@ def backtest_volume_breakout(
                             new_trail = entry_price + new_locked * (entry_price - stop_price)
                             if trail_stop is None or new_trail > trail_stop:
                                 trail_stop = new_trail
+                                moved_word = "up" if direction == "long" else "down"
                                 print(
-                                    f"    🔄 Trailing stop moved up to {trail_stop:.2f} (+{new_locked}R locked)"
+                                    f"    🔄 Trailing stop moved {moved_word} to {trail_stop:.2f} (+{new_locked}R locked)"
                                 )
                 else:
                     profit_r = (entry_price - low) / (stop_price - entry_price)
@@ -245,10 +246,10 @@ def backtest_volume_breakout(
                             new_trail = entry_price - new_locked * (stop_price - entry_price)
                             if trail_stop is None or new_trail < trail_stop:
                                 trail_stop = new_trail
+                                moved_word = "up" if direction == "long" else "down"
                                 print(
-                                    f"    🔄 Trailing stop moved {'down' if direction=='short' else 'up'} to {trail_stop:.2f} (+{new_locked}R locked)"
+                                    f"    🔄 Trailing stop moved {moved_word} to {trail_stop:.2f} (+{new_locked}R locked)"
                                 )
-
             active_stop = trail_stop if partial_hit else stop_price
             stop_hit = False
             if direction == "long":
@@ -267,7 +268,7 @@ def backtest_volume_breakout(
                     balance += pnl
                     total_sl += 1
                     print(
-                        f"    ❌ Stop-loss hit at {exit_time} → -${risk:.2f} (Full SL)"
+                        f"    ❌ Stop-loss hit at {exit_time} → -${abs(pnl):.2f} (Full SL)"
                     )
                     print(f"    📊 Account balance after trade: ${balance:.2f}")
                 else:
@@ -299,7 +300,6 @@ def backtest_volume_breakout(
                             f"    🟡 Break-even stop hit at {exit_time} after partial. Trade outcome: Partial TP then SL"
                         )
                         print(f"    📊 Account balance after trade: ${balance:.2f}")
-
                 trade_log.append(
                     {
                         "entry_time": entry_time,
@@ -748,7 +748,7 @@ def analyze_results(
 
 
 
-LOG_DIR = Path("/Users/romakaminskiy/PycharmProjects")
+LOG_DIR = Path("/Users/romakaminskiy/PycharmProjects/results")
 
 
 def _ensure_log_dir() -> Path:
@@ -816,6 +816,21 @@ def run_iteration(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = log_dir / f"iteration_{iteration_number:03d}_{timestamp}.txt"
     filename.write_text(output, encoding="utf-8")
+
+    # infer symbol from the data file name (fallback to 'session' if not available)
+    try:
+        symbol = Path("/Users/romakaminskiy/PycharmProjects/PythonProject/results").stem
+    except Exception:
+        symbol = "session"
+
+    res_dir = Path("results")
+    res_dir.mkdir(parents=True, exist_ok=True)
+
+    res_txt = res_dir / f"log_{symbol}_{timestamp}.txt"
+    res_txt.write_text(output, encoding="utf-8")
+    print(f"📝 Saved terminal-style log to: {res_txt.resolve()}")
+    # ---------------------------------------------------------------
+
     print(f"\n📝 Iteration {iteration_number} output saved to {filename.resolve()}")
 
 
